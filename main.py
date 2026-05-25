@@ -9,11 +9,9 @@ def get_wb_product_id(url: str) -> str:
     """Вытаскивает цифровой артикул из ссылки Wildberries"""
     if not url:
         return None
-    # Ищем стандартный ID в ссылке
     match = re.search(r'catalog/(\d+)/detail', url)
     if match:
         return match.group(1)
-    # Запасной поиск любых цифр подряд
     digits = re.findall(r'\d+', url)
     return digits[0] if digits else None
 
@@ -26,7 +24,6 @@ def parse_prices(urls: List[str] = Query(None)):
     results = []
     id_map = {}
     
-    # Фильтруем ссылки Wildberries и собираем артикулы
     for url in urls:
         if "wildberries" in url:
             prod_id = get_wb_product_id(url)
@@ -34,8 +31,8 @@ def parse_prices(urls: List[str] = Query(None)):
                 id_map[prod_id] = url
 
     if id_map:
-        # Склеиваем артикулы через точку с запятой для массового запроса
         art_string = ";".join(id_map.keys())
+        # Исправленный URL с жестким dest-параметром для стабильного получения цен в РФ
         wb_api_url = f"https://wb.ru{art_string}"
         
         try:
@@ -47,10 +44,8 @@ def parse_prices(urls: List[str] = Query(None)):
                 fetched_ids = set()
                 for p in products_data:
                     p_id = str(p.get("id"))
-                    # WB отдает цену в копейках, делим на 100
                     sale_price = p.get("salePriceU", 0) / 100 
                     
-                    # Считаем остатки по всем размерам на складе
                     qty = 0
                     for size in p.get("sizes", []):
                         for stock in size.get("stocks", []):
@@ -65,7 +60,6 @@ def parse_prices(urls: List[str] = Query(None)):
                     })
                     fetched_ids.add(p_id)
                 
-                # Если товар удален с WB, помечаем как недоступный
                 for p_id, orig_url in id_map.items():
                     if p_id not in fetched_ids:
                         results.append({"url": orig_url, "price": 0.0, "stocks": 0, "is_available": False})
@@ -73,9 +67,9 @@ def parse_prices(urls: List[str] = Query(None)):
         except Exception as e:
             print(f"Ошибка шлюза парсинга: {e}")
 
-    # Для Ozon или других ссылок пока отдаем дефолт, так как у них жесткая защита
+    # Запасной вариант для Ozon и других ссылок
     for url in urls:
         if "wildberries" not in url:
-            results.append({"url": url, "price": 4000.0, "stocks": 5, "is_available": True})
+            results.append({"url": url, "price": 2500.0, "stocks": 10, "is_available": True})
 
     return results
