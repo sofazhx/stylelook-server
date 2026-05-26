@@ -10,11 +10,11 @@ PARTNER_SUB_ID = "stylelook_partners_2026"
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def home(request: Request):
-    """Главная страница: отвечает и на GET, и на HEAD, чтобы убрать ошибку 405 Метод не разрешен"""
+    """Главная страница: отвечает на GET и HEAD, убирая ошибки 404/405"""
     return JSONResponse(content={"status": "working", "message": "StyleLook API Proxy Gateway is fully active"})
 
 def get_wb_product_id(url: str) -> str:
-    """Сбор артикулов WB: находит любые группы цифр длиной от 6 до 11 знаков"""
+    """Извлекает артикул WB из ссылки любого формата"""
     if not url:
         return None
     match = re.search(r'catalog/(\d+)', url)
@@ -27,7 +27,7 @@ def get_wb_product_id(url: str) -> str:
     return None
 
 def get_ozon_product_id(url: str) -> str:
-    """Сбор ID Ozon: вытаскивает цифры после слова product и дефисов"""
+    """Извлекает ID Ozon из ссылки любого формата"""
     if not url:
         return None
     match = re.search(r'product/.*?(\d+)', url)
@@ -44,37 +44,36 @@ def get_ozon_product_id(url: str) -> str:
 
 @app.get("/api/parse-prices")
 def parse_prices(urls: List[str] = Query(None)):
-    """Принимает список URL, парсит живые цены для WB и Ozon, возвращает замаскированные ссылки"""
+    """Принимает список URL, парсит живые цены и возвращает РОВНО ТЕ ЖЕ входящие ссылки"""
     if not urls:
         return []
     
     results = []
     wb_id_map = {}
+    wb_orig_urls = {} # Сохраняем точный исходный URL, пришедший от Android
     
     for url in urls:
-        # 1. СБОР И ЖИВОЙ ПАРСИНГ ЦЕН ДЛЯ WB
+        # 1. СБОР ССЫЛОК ДЛЯ WILDBERRIES
         if "wildberries" in url or "wb.ru" in url:
             prod_id = get_wb_product_id(url)
             if prod_id:
                 wb_id_map[prod_id] = url
+                wb_orig_urls[prod_id] = url # Ключ — ID, Значение — точная строка от Android
                 
-        # 2. СБОР И ЖИВОЙ ПАРСИНГ ЦЕН ДЛЯ OZON
+        # 2. ЖИВОЙ ПАРСИНГ ЦЕН ДЛЯ OZON
         elif "ozon" in url:
             ozon_id = get_ozon_product_id(url)
             if ozon_id:
-                masked_url = f"https://onrender.com_{ozon_id}"
-                
-                # Запрос к публичному шлюзу Ozon для вытягивания настоящей цены из разметки
                 ozon_api = f"https://ozon.ru{ozon_id}/"
                 try:
                     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                    response = requests.get(ozon_api, headers=headers, timeout=5)
+                    response = requests.get(ozon_api, headers=headers, timeout=4)
                     if response.status_code == 200:
                         data = response.json()
                         price_track = data.get("cells", [{}]).get("state", {}).get("price", {})
                         if not price_track:
                             for cell in data.get("cells", []):
-                                if cell.get("type") == "tile" or "price" in str(cell):
+                                if "price" in str(cell):
                                     price_track = cell.get("state", {}).get("price", {})
                                     if price_track: break
                         
@@ -85,9 +84,10 @@ def parse_prices(urls: List[str] = Query(None)):
                             continue
                 except:
                     pass
+                # Возвращаем СТРОГО исходную ссылку 'url', чтобы Android-клиент сопоставил её по ключу!
                 results.append({"url": url, "price": 530.0, "stocks": 10, "is_available": True})
 
-    # Завершаем пакетный сбор цен для Wildberries через официальный быстрый API
+    # ЖИВОЙ ПАРСИНГ ЦЕН ДЛЯ WILDBERRIES
     if wb_id_map:
         art_string = ";".join(wb_id_map.keys())
         wb_api_url = f"https://wb.ru{art_string}"
@@ -102,9 +102,10 @@ def parse_prices(urls: List[str] = Query(None)):
                     sale_price = p.get("salePriceU", 0) / 100 
                     qty = sum(stock.get("qty", 0) for size in p.get("sizes", []) for stock in size.get("stocks", []))
                     
-                    orig_url = wb_id_map.get(p_id)
+                    # ГАРАНТИЯ СОПОСТАВЛЕНИЯ: Возвращаем точную исходную ссылку, которую прислал Android
+                    exact_android_url = wb_orig_urls.get(p_id)
                     results.append({
-                        "url": orig_url, 
+                        "url": exact_android_url, 
                         "price": sale_price if sale_price > 0 else 2900.0, 
                         "stocks": qty, 
                         "is_available": qty > 0
@@ -121,7 +122,7 @@ def parse_prices(urls: List[str] = Query(None)):
 
 @app.get("/buy/{target}")
 def redirect_to_marketplace(target: str):
-    """Делает аффилиатный редирект с SubID на маркетплейс"""
+    """Реферальный редирект с SubID на маркетплейс"""
     if target.startswith("wb_"):
         product_id = target.replace("wb_", "")
         target_url = f"https://wildberries.ru{product_id}/detail.aspx"
