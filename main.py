@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Query
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import RedirectResponse, JSONResponse
 import requests
 import re
 from typing import List
@@ -9,11 +9,11 @@ app = FastAPI()
 # Твой партнерский SubID для монетизации и защиты проекта
 PARTNER_SUB_ID = "stylelook_partners_2026"
 
-@app.get("/")
-def home():
-    """ИСПРАВЛЕНО: Главная страница шлюза. 
-    Теперь она возвращает JSON-ответ и подтверждает Android-клиенту, что сервер активен"""
-    return {"status": "working", "message": "StyleLook API Proxy Gateway is fully active"}
+@app.route("/", methods=["GET", "HEAD"])
+def home(request: Request):
+    """ИСПРАВЛЕНО: Универсальная главная страница шлюза. 
+    Она отвечает и на GET, и на HEAD запросы, убирая ошибку '405 Метод не разрешен'"""
+    return JSONResponse(content={"status": "working", "message": "StyleLook API Proxy Gateway is fully active"})
 
 def get_wb_product_id(url: str) -> str:
     """Вытаскивает цифровой артикул из ссылки Wildberries"""
@@ -102,7 +102,6 @@ def parse_prices(urls: List[str] = Query(None)):
 def redirect_to_marketplace(target: str):
     """Эндпоинт-обманка: определяет тип маркетплейса, внедряет реферальный ID 
     и бесшовно перенаправляет браузер пользователя на оригинальный товар"""
-    # ИСПРАВЛЕНО: Теперь тут используется исключительно правильный .startswith() нижним регистром
     if target.startswith("wb_"):
         product_id = target.replace("wb_", "")
         target_url = f"https://wildberries.ru{product_id}/detail.aspx"
