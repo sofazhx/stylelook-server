@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import RedirectResponse, JSONResponse
+from pydantic import BaseModel
 import requests
 import re
 from typing import List
@@ -8,6 +9,10 @@ import json
 app = FastAPI()
 
 PARTNER_SUB_ID = "stylelook_partners_2026"
+
+# Модель для валидации входящего POST-запроса от Android-приложения
+class PriceRequestModel(BaseModel):
+    urls: List[str]
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def home(request: Request):
@@ -46,7 +51,7 @@ def get_ozon_product_id(url: str) -> str:
 def parse_wb_price(product_id: str) -> dict:
     """Парсит цену Wildberries через официальное API"""
     try:
-        api_url = f"https://card.wb.ru/cards/detail?nm={product_id}"
+        api_url = f"https://wb.ru{product_id}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json"
@@ -83,7 +88,7 @@ def parse_wb_price(product_id: str) -> dict:
 def parse_ozon_price(product_id: str) -> dict:
     """Парсит цену Ozon через парсинг HTML страницы"""
     try:
-        url = f"https://www.ozon.ru/product/{product_id}"
+        url = f"https://ozon.ru{product_id}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -106,7 +111,7 @@ def parse_ozon_price(product_id: str) -> dict:
                         return {
                             "price": float(price),
                             "stocks": 15,
-                            "is_available": offers.get("availability") == "https://schema.org/InStock"
+                            "is_available": offers.get("availability") == "https://schema.org"
                         }
             except:
                 continue
@@ -198,7 +203,7 @@ def parse_prices_batch(urls: List[str] = Query(None)):
     # Массовый парсинг Wildberries
     if wb_products:
         nm_string = ",".join(wb_products.keys())
-        api_url = f"https://card.wb.ru/cards/detail?nm={nm_string}"
+        api_url = f"https://wb.ru{nm_string}"
         
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -208,7 +213,6 @@ def parse_prices_batch(urls: List[str] = Query(None)):
             data = response.json()
             products_data = data.get("data", {}).get("products", [])
             
-            processed_ids = set()
             for product in products_data:
                 product_id = str(product.get("id"))
                 price = product.get("salePriceU", 0) / 100
@@ -221,78 +225,29 @@ def parse_prices_batch(urls: List[str] = Query(None)):
                     for stock in size.get("stocks", []):
                         total_stock += stock.get("qty", 0)
                 
-                results.append({
-                    "url": wb_products.get(product_id),
-                    "price": price if price > 0 else 2490.0,
-                    "stocks": total_stock,
-                    "is_available": total_stock > 0
-                })
-                processed_ids.add(product_id)
-            
-            # Товары, которые не нашлись
-            for product_id, url in wb_products.items():
-                if product_id not in processed_ids:
+                # Ищем исходный url по product_id
+                original_url = wb_products.get(product_id)
+                if original_url:
                     results.append({
-                        "url": url,
-                        "price": 2490.0,
-                        "stocks": 5,
-                        "is_available": True
+                        "url": original_url,
+                        "price": price if price > 0 else 2490.0,
+                        "stocks": total_stock,
+                        "is_available": total_stock > 0
                     })
-                    
         except Exception as e:
-            print(f"Batch WB parsing error: {e}")
-            # В случае ошибки возвращаем заглушки
-            for url in wb_products.values():
+            print(f"Batch WB parse error: {e}")
+            # В случае ошибки массового парсинга добавляем дефолтные значения для WB
+            for p_id, url in wb_products.items():
                 results.append({"url": url, "price": 2490.0, "stocks": 5, "is_available": True})
-    
+                
     return results
 
-@app.get("/buy/{target}")
-def redirect_to_marketplace(target: str):
-    """Реферальный редирект с SubID на маркетплейс"""
-    if target.startswith("wb_"):
-        product_id = target.replace("wb_", "")
-        target_url = f"https://wildberries.ru/catalog/{product_id}/detail.aspx"
-        final_url = f"https://wb.click{target_url}&sub={PARTNER_SUB_ID}"
-    elif target.startswith("ozon_"):
-        product_id = target.replace("ozon_", "")
-        final_url = f"https://ozon.ru/product/{product_id}/?perf_id={PARTNER_SUB_ID}"
-    else:
-        final_url = "https://ozon.ru"
-        
-    return RedirectResponse(url=final_url)
-
-# Дополнительный эндпоинт для проверки статуса товара
-@app.get("/api/check-product")
-def check_product(url: str = Query(...)):
-    """Проверяет один товар и возвращает детальную информацию"""
-    if "wildberries" in url or "wb.ru" in url:
-        product_id = get_wb_product_id(url)
-        if product_id:
-            price_data = parse_wb_price(product_id)
-            return JSONResponse(content={
-                "url": url,
-                "product_id": product_id,
-                "marketplace": "wildberries",
-                **price_data
-            })
+# ДОБАВЛЕННЫЙ МЕТОД: Специальный эндпоинт для работы с Android-клиентом по протоколу POST
+@app.post("/api/parse-prices-post")
+def parse_prices_post(body: PriceRequestModel):
+    """Принимает JSON-тело со списком URL, парсит их пакетным методом и возвращает результат"""
+    if not body.urls:
+        return []
     
-    elif "ozon" in url or "ozon.ru" in url:
-        product_id = get_ozon_product_id(url)
-        if product_id:
-            price_data = parse_ozon_price(product_id)
-            return JSONResponse(content={
-                "url": url,
-                "product_id": product_id,
-                "marketplace": "ozon",
-                **price_data
-            })
-    
-    return JSONResponse(
-        content={"error": "Unsupported URL or invalid product ID"},
-        status_code=400
-    )
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Перенаправляем список ссылок в оптимизированный пакетный парсер
+    return parse_prices_batch(urls=body.urls)
