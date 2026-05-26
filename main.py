@@ -63,6 +63,7 @@ def parse_wb_price(product_id: str) -> dict:
         products = data.get("data", {}).get("products", [])
         
         if products:
+            # ИСПРАВЛЕНО: Берём первый элемент из списка товаров
             product = products[0]
             # Цена в копейках, делим на 100
             price = product.get("salePriceU", 0) / 100
@@ -242,7 +243,7 @@ def parse_prices_batch(urls: List[str] = Query(None)):
                 
     return results
 
-# ДОБАВЛЕННЫЙ МЕТОД: Специальный эндпоинт для работы с Android-клиентом по протоколу POST
+# Специальный эндпоинт для работы с Android-клиентом по протоколу POST
 @app.post("/api/parse-prices-post")
 def parse_prices_post(body: PriceRequestModel):
     """Принимает JSON-тело со списком URL, парсит их пакетным методом и возвращает результат"""
