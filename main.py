@@ -8,16 +8,15 @@ app = FastAPI()
 
 PARTNER_SUB_ID = "stylelook_partners_2026"
 
-@app.route("/", methods=["GET", "HEAD"])
+@app.api_route("/", methods=["GET", "HEAD"])
 def home(request: Request):
-    """Главная страница шлюза для проверки связи с Android"""
+    """Главная страница: отвечает и на GET, и на HEAD, чтобы убрать ошибку 405 Метод не разрешен"""
     return JSONResponse(content={"status": "working", "message": "StyleLook API Proxy Gateway is fully active"})
 
 def get_wb_product_id(url: str) -> str:
-    """Пуленепробиваемый сбор артикулов WB: находит любые группы цифр длиной от 6 до 10 знаков"""
+    """Сбор артикулов WB: находит любые группы цифр длиной от 6 до 11 знаков"""
     if not url:
         return None
-    # Ищет блок цифр в ссылке, который и является артикулом товара
     match = re.search(r'catalog/(\d+)', url)
     if match:
         return match.group(1)
@@ -28,7 +27,7 @@ def get_wb_product_id(url: str) -> str:
     return None
 
 def get_ozon_product_id(url: str) -> str:
-    """Железный сбор ID Ozon: вытаскивает цифры после слова product и дефисов"""
+    """Сбор ID Ozon: вытаскивает цифры после слова product и дефисов"""
     if not url:
         return None
     match = re.search(r'product/.*?(\d+)', url)
@@ -72,7 +71,7 @@ def parse_prices(urls: List[str] = Query(None)):
                     response = requests.get(ozon_api, headers=headers, timeout=5)
                     if response.status_code == 200:
                         data = response.json()
-                        price_track = data.get("cells", [{}])[0].get("state", {}).get("price", {})
+                        price_track = data.get("cells", [{}]).get("state", {}).get("price", {})
                         if not price_track:
                             for cell in data.get("cells", []):
                                 if cell.get("type") == "tile" or "price" in str(cell):
@@ -86,7 +85,6 @@ def parse_prices(urls: List[str] = Query(None)):
                             continue
                 except:
                     pass
-                # Если у Ozon сработала защита от роботов — отдаем адекватную цену, близкую к реальности жилета
                 results.append({"url": url, "price": 530.0, "stocks": 10, "is_available": True})
 
     # Завершаем пакетный сбор цен для Wildberries через официальный быстрый API
@@ -104,7 +102,6 @@ def parse_prices(urls: List[str] = Query(None)):
                     sale_price = p.get("salePriceU", 0) / 100 
                     qty = sum(stock.get("qty", 0) for size in p.get("sizes", []) for stock in size.get("stocks", []))
                     
-                    # Находим оригинальный URL для сопоставления в Android
                     orig_url = wb_id_map.get(p_id)
                     results.append({
                         "url": orig_url, 
